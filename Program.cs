@@ -3,8 +3,11 @@ using ECommerceAPI.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Adicionar serviços ao container
+// Configurar o DbContext
 builder.Services.AddDbContext<ECommerceDbContext>(options =>
 {
+    // SQLLite 
     options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
@@ -35,6 +38,7 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// Configure o pipeline HTTP
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

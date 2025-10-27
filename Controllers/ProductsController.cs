@@ -1,8 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using ECommerceAPI.Data;
-using ECommerceAPI.Models;
+﻿using ECommerceAPI.Data;
 using ECommerceAPI.DTOs;
+using ECommerceAPI.Models;
+using Microsoft.AspNetCore.JsonPatch;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace ECommerceAPI.Controllers
 {
@@ -19,14 +20,16 @@ namespace ECommerceAPI.Controllers
             _logger = logger;
         }
 
-        // GET: api/products?search=smartphone&minPrice=1000&maxPrice=5000&page=1&pageSize=10
+        // GET: api/products?search=smartphone&minPrice=1000&maxPrice=5000&page=1&pageSize=10&sortBy=price&sortOrder=desc
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ProductDTO>>> GetProducts(
             [FromQuery] string? search,
             [FromQuery] decimal? minPrice,
             [FromQuery] decimal? maxPrice,
             [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 10)
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string? sortBy = "name",
+            [FromQuery] string? sortOrder = "asc")
         {
             try
             {
@@ -46,24 +49,29 @@ namespace ECommerceAPI.Controllers
                         p.Description.ToLower().Contains(searchLower));
                 }
 
-                // Filtro por preço mínimo
+                // Filtro por preço mínimo e máximo
                 if (minPrice.HasValue)
-                {
                     query = query.Where(p => p.Price >= minPrice.Value);
-                }
 
-                // Filtro por preço máximo
                 if (maxPrice.HasValue)
-                {
                     query = query.Where(p => p.Price <= maxPrice.Value);
-                }
 
-                // Contagem total para metadados
                 var totalItems = await query.CountAsync();
+
+                // Ordenação
+                bool descending = sortOrder?.ToLower() == "desc";
+                sortBy = sortBy?.ToLower();
+
+                query = sortBy switch
+                {
+                    "price" => descending ? query.OrderByDescending(p => p.Price) : query.OrderBy(p => p.Price),
+                    "createdat" => descending ? query.OrderByDescending(p => p.CreatedAt) : query.OrderBy(p => p.CreatedAt),
+                    "name" => descending ? query.OrderByDescending(p => p.Name) : query.OrderBy(p => p.Name),
+                    _ => query.OrderBy(p => p.Name) 
+                };
 
                 // Paginação
                 var products = await query
-                    .OrderBy(p => p.Id)
                     .Skip((page - 1) * pageSize)
                     .Take(pageSize)
                     .Select(p => new ProductDTO
@@ -80,13 +88,14 @@ namespace ECommerceAPI.Controllers
                     })
                     .ToListAsync();
 
-                // Retorna junto com informações de paginação
                 var response = new
                 {
                     Page = page,
                     PageSize = pageSize,
                     TotalItems = totalItems,
                     TotalPages = (int)Math.Ceiling(totalItems / (double)pageSize),
+                    SortBy = sortBy,
+                    SortOrder = sortOrder,
                     Items = products
                 };
 
@@ -94,7 +103,7 @@ namespace ECommerceAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Erro ao buscar produtos com filtros e paginação");
+                _logger.LogError(ex, "Erro ao buscar produtos com filtros, paginação e ordenação");
                 return StatusCode(500, "Erro interno do servidor");
             }
         }
@@ -123,9 +132,7 @@ namespace ECommerceAPI.Controllers
                     .FirstOrDefaultAsync();
 
                 if (product == null)
-                {
                     return NotFound(new { message = $"Produto com ID {id} não encontrado" });
-                }
 
                 return Ok(product);
             }
@@ -144,9 +151,7 @@ namespace ECommerceAPI.Controllers
             {
                 var categoryExists = await _context.Categories.AnyAsync(c => c.Id == createProductDto.CategoryId);
                 if (!categoryExists)
-                {
                     return BadRequest(new { message = "Categoria não encontrada" });
-                }
 
                 var product = new Product
                 {
@@ -196,15 +201,11 @@ namespace ECommerceAPI.Controllers
             {
                 var product = await _context.Products.FindAsync(id);
                 if (product == null)
-                {
                     return NotFound(new { message = $"Produto com ID {id} não encontrado" });
-                }
 
                 var categoryExists = await _context.Categories.AnyAsync(c => c.Id == updateProductDto.CategoryId);
                 if (!categoryExists)
-                {
                     return BadRequest(new { message = "Categoria não encontrada" });
-                }
 
                 product.Name = updateProductDto.Name;
                 product.Description = updateProductDto.Description;
@@ -214,12 +215,64 @@ namespace ECommerceAPI.Controllers
                 product.CategoryId = updateProductDto.CategoryId;
 
                 await _context.SaveChangesAsync();
-
                 return NoContent();
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Erro ao atualizar produto {ProductId}", id);
+                return StatusCode(500, "Erro interno do servidor");
+            }
+        }
+
+        // PATCH: api/products/5
+        [HttpPatch("{id}")]
+        public async Task<IActionResult> PatchProduct(int id, [FromBody] JsonPatchDocument<UpdateProductDTO> patchDoc)
+        {
+            if (patchDoc == null)
+                return BadRequest(new { message = "Documento de patch inválido." });
+
+            try
+            {
+                var product = await _context.Products.FindAsync(id);
+                if (product == null)
+                    return NotFound(new { message = $"Produto com ID {id} não encontrado" });
+
+                // Mapeia o produto atual para o DTO de atualização
+                var productToPatch = new UpdateProductDTO
+                {
+                    Name = product.Name,
+                    Description = product.Description,
+                    Price = product.Price,
+                    Stock = product.Stock,
+                    ImageUrl = product.ImageUrl,
+                    CategoryId = product.CategoryId
+                };
+
+                // Aplica as alterações do patch
+                patchDoc.ApplyTo(productToPatch, ModelState);
+
+                // Valida os dados após o patch
+                if (!TryValidateModel(productToPatch))
+                    return ValidationProblem(ModelState);
+
+                // Verifica se a categoria existe (caso tenha sido alterada)
+                if (!await _context.Categories.AnyAsync(c => c.Id == productToPatch.CategoryId))
+                    return BadRequest(new { message = "Categoria não encontrada" });
+
+                // Aplica as alterações ao modelo original
+                product.Name = productToPatch.Name;
+                product.Description = productToPatch.Description;
+                product.Price = productToPatch.Price;
+                product.Stock = productToPatch.Stock;
+                product.ImageUrl = productToPatch.ImageUrl;
+                product.CategoryId = productToPatch.CategoryId;
+
+                await _context.SaveChangesAsync();
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro ao aplicar PATCH no produto {ProductId}", id);
                 return StatusCode(500, "Erro interno do servidor");
             }
         }
@@ -232,15 +285,11 @@ namespace ECommerceAPI.Controllers
             {
                 var product = await _context.Products.FindAsync(id);
                 if (product == null)
-                {
                     return NotFound(new { message = $"Produto com ID {id} não encontrado" });
-                }
 
                 var productInOrders = await _context.OrderItems.AnyAsync(oi => oi.ProductId == id);
                 if (productInOrders)
-                {
                     return BadRequest(new { message = "Não é possível excluir um produto que está em pedidos" });
-                }
 
                 _context.Products.Remove(product);
                 await _context.SaveChangesAsync();
@@ -262,9 +311,7 @@ namespace ECommerceAPI.Controllers
             {
                 var categoryExists = await _context.Categories.AnyAsync(c => c.Id == categoryId);
                 if (!categoryExists)
-                {
                     return NotFound(new { message = "Categoria não encontrada" });
-                }
 
                 var products = await _context.Products
                     .Include(p => p.Category)
@@ -288,6 +335,84 @@ namespace ECommerceAPI.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Erro ao buscar produtos da categoria {CategoryId}", categoryId);
+                return StatusCode(500, "Erro interno do servidor");
+            }
+        }
+
+        // GET: api/products/stats
+        [HttpGet("stats")]
+        public async Task<ActionResult<object>> GetProductStatistics()
+        {
+            try
+            {
+                // Caso não existam produtos
+                if (!await _context.Products.AnyAsync())
+                    return Ok(new
+                    {
+                        totalProducts = 0,
+                        totalStockValue = 0m,
+                        mostExpensiveProduct = (ProductDTO?)null,
+                        cheapestProduct = (ProductDTO?)null
+                    });
+
+                // Total de produtos
+                var totalProducts = await _context.Products.CountAsync();
+
+                // Valor total em estoque 
+                var totalStockValue = await _context.Products
+                    .SumAsync(p => (double)(p.Price * p.Stock));
+
+                decimal totalStockValueDecimal = (decimal)totalStockValue;
+
+                // Produto mais caro 
+                var mostExpensive = await _context.Products
+                    .Include(p => p.Category)
+                    .OrderByDescending(p => (double)p.Price)
+                    .Select(p => new ProductDTO
+                    {
+                        Id = p.Id,
+                        Name = p.Name,
+                        Description = p.Description,
+                        Price = p.Price,
+                        Stock = p.Stock,
+                        ImageUrl = p.ImageUrl,
+                        CreatedAt = p.CreatedAt,
+                        CategoryId = p.CategoryId,
+                        CategoryName = p.Category.Name
+                    })
+                    .FirstOrDefaultAsync();
+
+                // Produto mais barato 
+                var cheapest = await _context.Products
+                    .Include(p => p.Category)
+                    .OrderBy(p => (double)p.Price)
+                    .Select(p => new ProductDTO
+                    {
+                        Id = p.Id,
+                        Name = p.Name,
+                        Description = p.Description,
+                        Price = p.Price,
+                        Stock = p.Stock,
+                        ImageUrl = p.ImageUrl,
+                        CreatedAt = p.CreatedAt,
+                        CategoryId = p.CategoryId,
+                        CategoryName = p.Category.Name
+                    })
+                    .FirstOrDefaultAsync();
+
+                var result = new
+                {
+                    totalProducts,
+                    totalStockValue = totalStockValueDecimal,
+                    mostExpensiveProduct = mostExpensive,
+                    cheapestProduct = cheapest
+                };
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro ao gerar estatísticas de produtos");
                 return StatusCode(500, "Erro interno do servidor");
             }
         }

@@ -1,0 +1,57 @@
+### Variáveis
+@baseUrl = https://localhost:7274/api
+@productId = 1
+@categoryId = 1
+
+### 1. Listar todos os produtos
+GET {{baseUrl}}/products
+
+### 2. Buscar produto por ID
+GET {{baseUrl}}/products/{{productId}}
+
+### 3. Criar novo produto
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Teclado Mecânico",
+  "description": "Teclado mecânico RGB com switches blue",
+  "price": 349.90,
+  "stock": 60,
+  "imageUrl": "https://via.placeholder.com/300x300?text=Teclado",
+  "categoryId": 1
+}
+
+### 4. Atualizar produto
+PUT {{baseUrl}}/products/1
+Content-Type: application/json
+
+{
+  "name": "Smartphone XYZ Ultra",
+  "description": "Smartphone top de linha",
+  "price": 2999.99,
+  "stock": 40,
+  "imageUrl": "https://via.placeholder.com/300x300?text=SmartphoneUltra",
+  "categoryId": 1
+}
+
+### 5. Deletar produto
+DELETE {{baseUrl}}/products/10
+
+### 6. Listar categorias
+GET {{baseUrl}}/categories
+
+### 7. Buscar categoria com produtos
+GET {{baseUrl}}/categories/{{categoryId}}/products
+
+### 8. Criar categoria
+POST {{baseUrl}}/categories
+Content-Type: application/json
+
+{
+  "name": "Games",
+  "description": "Jogos e consoles"
+}
+
+### 9. Buscar produtos por categoria
+GET {{baseUrl}}/products/category/1
